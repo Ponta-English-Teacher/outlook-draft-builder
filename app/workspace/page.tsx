@@ -7,7 +7,6 @@ type DraftOut = { subject: string; body: string };
 type Mode = "reply" | "scratch";
 
 export default function WorkspacePage() {
-  // NEW: mode selector
   const [mode, setMode] = useState<Mode>("reply");
 
   const [requestText, setRequestText] = useState("");
@@ -39,9 +38,11 @@ export default function WorkspacePage() {
 
   const scratchTip = useMemo(() => {
     if (mode !== "scratch") return null;
-    const hasAnyInput = (purposeNote || "").trim().length > 0 || (requestText || "").trim().length > 0;
+    const hasAnyInput =
+      (purposeNote || "").trim().length > 0 ||
+      (requestText || "").trim().length > 0;
     if (hasAnyInput) return null;
-    return "Tip: In From-scratch mode, write your goal in Step 2 (even 1–2 lines is enough).";
+    return "Tip: In From-scratch mode, write your goal or a rough draft in Step 2.";
   }, [mode, purposeNote, requestText]);
 
   async function generateDraft() {
@@ -53,13 +54,12 @@ export default function WorkspacePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // NEW: tell the API which mode the user is in (safe even if API ignores it)
           mode,
           requestText,
           purposeNote,
           language,
           tone,
-          to: toField, // ✅ important (Step 3 To)
+          to: toField,
         }),
       });
 
@@ -67,6 +67,42 @@ export default function WorkspacePage() {
 
       if (!resp.ok) {
         setError(data?.error || "Draft generation failed.");
+        return;
+      }
+
+      const out = data as DraftOut;
+      setSubject(out.subject || "");
+      setBody(out.body || "");
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refineDraft() {
+    if (!subject || !body || busy) return;
+    setBusy(true);
+    setError(null);
+
+    try {
+      const resp = await fetch("/api/refine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject,
+          body,
+          language,
+          tone,
+          to: toField,
+          purposeNote,
+        }),
+      });
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        setError(data?.error || "Refinement failed.");
         return;
       }
 
@@ -122,7 +158,7 @@ export default function WorkspacePage() {
         </Link>
       </header>
 
-      {/* NEW: Mode selector */}
+      {/* Mode selector */}
       <section className="space-y-4">
         <h2 className="text-2xl font-semibold">Mode</h2>
         <p className="text-slate-300">
@@ -166,11 +202,14 @@ export default function WorkspacePage() {
         {scratchTip ? <div className="text-slate-400">{scratchTip}</div> : null}
       </section>
 
-      {/* Step 1: Request Intake (now optional in From-scratch mode) */}
+      {/* Step 1 */}
       <section className="space-y-6">
         <div className="flex items-end justify-between gap-4">
           <h2 className="text-2xl font-semibold">
-            Step 1 — {mode === "reply" ? "Paste the request you received" : "Source material (optional)"}
+            Step 1 —{" "}
+            {mode === "reply"
+              ? "Paste the request you received"
+              : "Source material (optional)"}
           </h2>
 
           {mode === "scratch" ? (
@@ -203,24 +242,33 @@ export default function WorkspacePage() {
         />
       </section>
 
-      {/* Step 2: Purpose / Intention */}
+      {/* Step 2 — now flexible */}
       <section className="space-y-6">
         <h2 className="text-2xl font-semibold">
-          Step 2 — Purpose of this email (optional)
+          Step 2 — Purpose / Your draft / Instructions (optional)
         </h2>
 
         <p className="text-slate-300">
-          Write in your own words what you are trying to do. This guides tone and
-          structure.
+          You can write any of the following here:
         </p>
+        <ul className="text-slate-400 list-disc list-inside space-y-1">
+          <li>A short purpose note — e.g. "Requesting cooperation politely"</li>
+          <li>
+            A rough draft you wrote yourself — the AI will rewrite it more
+            naturally while preserving your meaning and intent
+          </li>
+          <li>
+            Specific instructions — e.g. "Do not commit to a date yet" or
+            "Keep it brief"
+          </li>
+        </ul>
 
         <textarea
           className="w-full min-h-[160px] rounded-lg bg-slate-900 border border-slate-700 p-4 text-base"
           placeholder={`Examples:
 - Requesting cooperation
 - Asking questions first, not deciding yet
-- Confirming details politely
-- Administrative request with a soft tone`}
+- (or paste your own rough draft here)`}
           value={purposeNote}
           onChange={(e) => setPurposeNote(e.target.value)}
         />
@@ -328,7 +376,7 @@ export default function WorkspacePage() {
             <label className="block text-slate-300 mb-1">To</label>
             <input
               className="w-full rounded-lg bg-slate-900 border border-slate-700 p-3"
-              placeholder='e.g. 今枝さん/Ms. Imaeda'
+              placeholder="e.g. 今枝さん/Ms. Imaeda"
               value={toField}
               onChange={(e) => setToField(e.target.value)}
             />
@@ -350,7 +398,7 @@ export default function WorkspacePage() {
 
       {/* Step 4: Generate Draft */}
       <section className="space-y-6">
-        <h2 className="text-2xl font-semibold">Step 4 — Generate / Revise Draft</h2>
+        <h2 className="text-2xl font-semibold">Step 4 — Generate Draft</h2>
 
         <div className="flex flex-wrap items-center gap-4">
           <button
@@ -358,7 +406,7 @@ export default function WorkspacePage() {
             disabled={busy}
             className="px-6 py-3 rounded-lg bg-sky-600 text-black font-semibold disabled:opacity-60"
           >
-            {busy ? "Generating..." : "Generate Draft with ChatGPT"}
+            {busy ? "Working..." : "Generate Draft with ChatGPT"}
           </button>
 
           {error ? (
@@ -372,8 +420,14 @@ export default function WorkspacePage() {
       {/* Step 5: Draft Preview */}
       <section className="space-y-6">
         <h2 className="text-2xl font-semibold">
-          Step 5 — Draft preview (what will be exported)
+          Step 5 — Draft preview (edit here, then refine or export)
         </h2>
+
+        <p className="text-slate-400">
+          Edit the subject and body manually if needed. Then use{" "}
+          <span className="text-slate-300 font-medium">Refine Edited Draft</span>{" "}
+          to polish your changes while preserving your meaning.
+        </p>
 
         <div className="space-y-4">
           <div>
@@ -396,20 +450,42 @@ export default function WorkspacePage() {
             />
           </div>
         </div>
+
+        {/* Refine button */}
+        <div className="flex flex-wrap items-center gap-4 pt-2">
+          <button
+            onClick={refineDraft}
+            disabled={!subject || !body || busy}
+            className="px-6 py-3 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50"
+            title={
+              !subject || !body
+                ? "Generate a draft first"
+                : "Polish the edited draft without changing its meaning"
+            }
+          >
+            {busy ? "Working..." : "Refine Edited Draft"}
+          </button>
+          <p className="text-slate-400 text-sm">
+            Improves wording, grammar, and tone. Preserves your intended meaning
+            and factual content.
+          </p>
+        </div>
       </section>
 
       {/* Export */}
       <section className="border-t border-slate-800 pt-10 flex items-center justify-between">
         <p className="text-slate-400">
-          Export creates an Outlook draft file. You will open it in Outlook and send
-          manually.
+          Export creates an Outlook draft file. You will open it in Outlook and
+          send manually.
         </p>
 
         <button
           onClick={exportOutlookDraft}
           disabled={!subject || !body || busy}
           className="px-6 py-3 rounded-lg bg-emerald-600 text-black font-semibold disabled:opacity-50"
-          title={!subject || !body ? "Generate a draft first" : "Download draft.eml"}
+          title={
+            !subject || !body ? "Generate a draft first" : "Download draft.eml"
+          }
         >
           Export Outlook Draft File
         </button>
