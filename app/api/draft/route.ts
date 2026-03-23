@@ -13,9 +13,11 @@ Hokusei Gakuen University`,
 };
 
 type Mode = "reply" | "scratch";
+type Intent = "default" | "full" | "acknowledge" | "delay" | "question" | "rewrite";
 
 type DraftRequest = {
   mode?: Mode;
+  intent?: Intent;
   requestText?: string;
   purposeNote?: string;
   language?: "Japanese" | "English" | "Bilingual";
@@ -290,12 +292,141 @@ function classifyPurposeNote(note: string): "draft" | "instruction" {
 
 function userPrompt(args: {
   mode: Mode;
+  intent: Intent;
   replyTarget: string;
   backgroundThread: string;
   purposeNote: string;
   language: "Japanese" | "English" | "Bilingual";
   tone: "Polite" | "Neutral" | "Administrative";
 }): string {
+  const { intent } = args;
+
+  // ── Priority 1: explicit intent (overrides Step 2 classification) ──────────
+
+  if (intent === "acknowledge") {
+    return `
+TASK:
+Draft a short acknowledgment reply. Nothing more.
+
+RULES (STRICT):
+- Write ONLY that you have received the message.
+- Do NOT respond to specific content, questions, or requests in the original message.
+- Do NOT confirm details, offer actions, or state next steps.
+- One to three sentences maximum. Brevity is correct here.
+
+ORIGINAL MESSAGE (BACKGROUND ONLY):
+${args.replyTarget}
+
+${args.purposeNote ? `ADDITIONAL NOTE FROM SENDER:\n${args.purposeNote}` : ""}
+
+SETTINGS:
+- language: ${args.language}
+- tone: ${args.tone}
+
+REMINDERS:
+- No greeting line. No signature. Output strict JSON only.
+`.trim();
+  }
+
+  if (intent === "delay") {
+    return `
+TASK:
+Draft a reply saying you have received the message and will respond properly later.
+
+RULES (STRICT):
+- Acknowledge receipt.
+- Say you will follow up (without committing to a specific date unless the sender's note specifies one).
+- Do NOT respond to the content, answer questions, or make decisions yet.
+- Keep it short — two to four sentences.
+
+ORIGINAL MESSAGE (BACKGROUND ONLY):
+${args.replyTarget}
+
+${args.purposeNote ? `ADDITIONAL NOTE FROM SENDER:\n${args.purposeNote}` : ""}
+
+SETTINGS:
+- language: ${args.language}
+- tone: ${args.tone}
+
+REMINDERS:
+- No greeting line. No signature. Output strict JSON only.
+`.trim();
+  }
+
+  if (intent === "question") {
+    return `
+TASK:
+Draft a reply that asks a clarifying question instead of answering or agreeing.
+
+RULES (STRICT):
+- Do NOT answer requests or confirm details from the original message.
+- Do NOT make commitments or state actions.
+- Ask one focused clarifying question, or ask for more information.
+- Use the sender's note (if any) to identify what to ask about.
+
+ORIGINAL MESSAGE (BACKGROUND CONTEXT):
+${args.replyTarget}
+
+${args.purposeNote ? `WHAT TO CLARIFY (from sender):\n${args.purposeNote}` : ""}
+
+SETTINGS:
+- language: ${args.language}
+- tone: ${args.tone}
+
+REMINDERS:
+- No greeting line. No signature. Output strict JSON only.
+`.trim();
+  }
+
+  if (intent === "full") {
+    return `
+TASK:
+Draft a full, comprehensive email reply that addresses all points in the original message.
+
+ORIGINAL MESSAGE:
+${args.replyTarget}
+
+BACKGROUND CONTEXT:
+${args.backgroundThread}
+
+${args.purposeNote ? `SENDER'S INSTRUCTIONS / CONSTRAINTS:\n${args.purposeNote}` : ""}
+
+SETTINGS:
+- language: ${args.language}
+- tone: ${args.tone}
+
+REMINDERS:
+- No greeting line. No signature. Output strict JSON only.
+`.trim();
+  }
+
+  if (intent === "rewrite") {
+    return `
+TASK:
+The sender has written a rough draft. Rewrite it as a polished, professional email.
+
+RULES (STRICT):
+- Preserve the sender's meaning, intended action, and decision exactly.
+- Preserve all factual content (names, dates, numbers, commitments).
+- Do NOT introduce new claims or remove important details.
+- Only improve clarity, grammar, naturalness, and tone.
+
+SENDER'S ROUGH DRAFT:
+${args.purposeNote || args.replyTarget}
+
+${args.backgroundThread ? `REFERENCE CONTEXT (optional):\n${args.backgroundThread}` : ""}
+
+SETTINGS:
+- language: ${args.language}
+- tone: ${args.tone}
+
+REMINDERS:
+- No greeting line. No signature. Output strict JSON only.
+`.trim();
+  }
+
+  // ── Priority 2 & 3: default — Step 2 classification then Step 1 ────────────
+
   const noteType = classifyPurposeNote(args.purposeNote);
 
   if (args.mode === "scratch") {
@@ -459,6 +590,11 @@ export async function POST(req: Request) {
 
     const mode: Mode = data.mode === "scratch" ? "scratch" : "reply";
 
+    const VALID_INTENTS: Intent[] = ["default", "full", "acknowledge", "delay", "question", "rewrite"];
+    const intent: Intent = VALID_INTENTS.includes(data.intent as Intent)
+      ? (data.intent as Intent)
+      : "default";
+
     const requestText = safeTrim(data.requestText ?? "", 50000);
     const purposeNote = safeTrim(data.purposeNote ?? "", 2000);
 
@@ -514,6 +650,7 @@ export async function POST(req: Request) {
 
     const uContent = userPrompt({
       mode,
+      intent,
       replyTarget,
       backgroundThread: background,
       purposeNote,

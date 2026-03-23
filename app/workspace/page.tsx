@@ -5,20 +5,88 @@ import Link from "next/link";
 
 type DraftOut = { subject: string; body: string };
 type Mode = "reply" | "scratch";
+type Intent = "default" | "full" | "acknowledge" | "delay" | "question" | "rewrite";
+
+const INTENT_OPTIONS: { value: Intent; label: string; hint: string }[] = [
+  { value: "default",     label: "Default",         hint: "Let Step 2 guide the output" },
+  { value: "full",        label: "Full reply",       hint: "Respond to all points" },
+  { value: "acknowledge", label: "Acknowledge only", hint: "Short acknowledgment only" },
+  { value: "delay",       label: "Reply later",      hint: "Acknowledge, follow up later" },
+  { value: "question",    label: "Ask a question",   hint: "Ask for clarification" },
+  { value: "rewrite",     label: "Rewrite my draft", hint: "Polish Step 2 as a draft" },
+];
+
+// Small pill-style toggle used in the compact control bar
+function Pill({
+  active,
+  onClick,
+  children,
+  activeColor = "border-sky-500",
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  activeColor?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-3 py-1.5 rounded-lg border text-sm font-medium transition whitespace-nowrap",
+        active
+          ? `${activeColor} bg-slate-800 text-slate-100`
+          : "border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200 hover:border-slate-600",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Collapsible section with summary badge when closed
+function Collapsible({
+  title,
+  defaultOpen = true,
+  badge,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  badge?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border border-slate-800 rounded-xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-slate-900 hover:bg-slate-800 transition text-left gap-4"
+      >
+        <span className="font-medium text-slate-200 text-sm">{title}</span>
+        <span className="flex items-center gap-3 shrink-0">
+          {!open && badge ? (
+            <span className="text-xs text-slate-500 truncate max-w-[180px]">{badge}</span>
+          ) : null}
+          <span className="text-slate-500 text-xs">{open ? "▲" : "▼"}</span>
+        </span>
+      </button>
+      {open && <div className="px-4 py-4 bg-slate-950">{children}</div>}
+    </div>
+  );
+}
 
 export default function WorkspacePage() {
   const [mode, setMode] = useState<Mode>("reply");
+  const [intent, setIntent] = useState<Intent>("default");
 
   const [requestText, setRequestText] = useState("");
   const [purposeNote, setPurposeNote] = useState("");
+  const [showStep2Examples, setShowStep2Examples] = useState(false);
 
-  const [language, setLanguage] = useState<"Japanese" | "English" | "Bilingual">(
-    "Japanese"
-  );
-
-  const [tone, setTone] = useState<"Polite" | "Neutral" | "Administrative">(
-    "Administrative"
-  );
+  const [language, setLanguage] = useState<"Japanese" | "English" | "Bilingual">("Japanese");
+  const [tone, setTone] = useState<"Polite" | "Neutral" | "Administrative">("Administrative");
 
   const [toField, setToField] = useState("");
   const [ccField, setCcField] = useState("");
@@ -30,46 +98,23 @@ export default function WorkspacePage() {
   const [error, setError] = useState<string | null>(null);
 
   const guidanceText = useMemo(() => {
-    if (mode === "reply") {
-      return "Uses Step 1 + Step 2 to draft subject/body.";
-    }
-    return "Uses Step 2 (+ recipients / settings) to draft subject/body. Step 1 is optional in From-scratch mode.";
+    if (mode === "reply") return "Uses Step 1 + Step 2 to draft subject/body.";
+    return "Uses Step 2 (+ settings) to draft. Step 1 is optional.";
   }, [mode]);
-
-  const scratchTip = useMemo(() => {
-    if (mode !== "scratch") return null;
-    const hasAnyInput =
-      (purposeNote || "").trim().length > 0 ||
-      (requestText || "").trim().length > 0;
-    if (hasAnyInput) return null;
-    return "Tip: In From-scratch mode, write your goal or a rough draft in Step 2.";
-  }, [mode, purposeNote, requestText]);
 
   async function generateDraft() {
     setBusy(true);
     setError(null);
-
     try {
       const resp = await fetch("/api/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mode,
-          requestText,
-          purposeNote,
-          language,
-          tone,
-          to: toField,
+          mode, intent, requestText, purposeNote, language, tone, to: toField,
         }),
       });
-
       const data = await resp.json();
-
-      if (!resp.ok) {
-        setError(data?.error || "Draft generation failed.");
-        return;
-      }
-
+      if (!resp.ok) { setError(data?.error || "Draft generation failed."); return; }
       const out = data as DraftOut;
       setSubject(out.subject || "");
       setBody(out.body || "");
@@ -84,28 +129,14 @@ export default function WorkspacePage() {
     if (!subject || !body || busy) return;
     setBusy(true);
     setError(null);
-
     try {
       const resp = await fetch("/api/refine", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subject,
-          body,
-          language,
-          tone,
-          to: toField,
-          purposeNote,
-        }),
+        body: JSON.stringify({ subject, body, language, tone, to: toField, purposeNote }),
       });
-
       const data = await resp.json();
-
-      if (!resp.ok) {
-        setError(data?.error || "Refinement failed.");
-        return;
-      }
-
+      if (!resp.ok) { setError(data?.error || "Refinement failed."); return; }
       const out = data as DraftOut;
       setSubject(out.subject || "");
       setBody(out.body || "");
@@ -118,378 +149,249 @@ export default function WorkspacePage() {
 
   async function exportOutlookDraft() {
     if (!subject || !body || busy) return;
-
     const resp = await fetch("/api/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        to: toField,
-        cc: ccField,
-        subject,
-        body,
-      }),
+      body: JSON.stringify({ to: toField, cc: ccField, subject, body }),
     });
-
     if (!resp.ok) return;
-
     const blob = await resp.blob();
     const url = window.URL.createObjectURL(blob);
-
     const a = document.createElement("a");
     a.href = url;
     a.download = "draft.eml";
     document.body.appendChild(a);
     a.click();
     a.remove();
-
     window.URL.revokeObjectURL(url);
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 p-10 space-y-16">
+    <main className="min-h-screen bg-slate-950 text-slate-100 p-6 max-w-4xl mx-auto space-y-4">
+
       {/* Header */}
-      <header className="space-y-4">
-        <h1 className="text-4xl font-semibold">Workspace</h1>
-        <p className="text-lg text-slate-300">
-          Draft creation only. This app never sends email.
-        </p>
-        <Link href="/" className="underline text-slate-400">
-          ← Back to Home
-        </Link>
+      <header className="flex items-center gap-4 pb-3 border-b border-slate-800">
+        <h1 className="text-xl font-semibold">Workspace</h1>
+        <span className="text-slate-600 text-sm">Draft only — never sends</span>
+        <Link href="/" className="underline text-slate-500 text-sm ml-auto">← Home</Link>
       </header>
 
-      {/* Mode selector */}
-      <section className="space-y-4">
-        <h2 className="text-2xl font-semibold">Mode</h2>
-        <p className="text-slate-300">
-          Choose how you want to create a message.
-        </p>
+      {/* ── Combined control bar ── */}
+      <section className="space-y-3 p-4 bg-slate-900 rounded-xl border border-slate-800">
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => setMode("reply")}
-            className={[
-              "rounded-xl border p-5 text-left transition",
-              mode === "reply"
-                ? "border-sky-500 bg-slate-900"
-                : "border-slate-800 bg-slate-950 hover:bg-slate-900",
-            ].join(" ")}
-          >
-            <div className="text-lg font-semibold">Reply to received material</div>
-            <div className="text-slate-400 mt-1">
-              Use email text / notes (and later file uploads) as the source.
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setMode("scratch")}
-            className={[
-              "rounded-xl border p-5 text-left transition",
-              mode === "scratch"
-                ? "border-sky-500 bg-slate-900"
-                : "border-slate-800 bg-slate-950 hover:bg-slate-900",
-            ].join(" ")}
-          >
-            <div className="text-lg font-semibold">Create from scratch</div>
-            <div className="text-slate-400 mt-1">
-              No incoming message required. Describe your goal in Step 2.
-            </div>
-          </button>
+        {/* Mode */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-slate-500 w-24 shrink-0">Mode</span>
+          <Pill active={mode === "reply"} onClick={() => setMode("reply")}>
+            Reply to received
+          </Pill>
+          <Pill active={mode === "scratch"} onClick={() => setMode("scratch")}>
+            From scratch
+          </Pill>
         </div>
 
-        {scratchTip ? <div className="text-slate-400">{scratchTip}</div> : null}
+        {/* Message Type */}
+        <div className="flex items-start gap-2 flex-wrap">
+          <span className="text-xs text-slate-500 w-24 shrink-0 pt-1.5">Message type</span>
+          <div className="flex flex-wrap gap-2">
+            {INTENT_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setIntent(opt.value)}
+                title={opt.hint}
+                className={[
+                  "px-3 py-1.5 rounded-lg border text-sm font-medium transition whitespace-nowrap",
+                  intent === opt.value
+                    ? "border-amber-500 bg-slate-800 text-slate-100"
+                    : "border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200 hover:border-slate-600",
+                ].join(" ")}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Language */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-slate-500 w-24 shrink-0">Language</span>
+          {(["Japanese", "English", "Bilingual"] as const).map((l) => (
+            <Pill key={l} active={language === l} onClick={() => setLanguage(l)}>
+              {l === "Bilingual" ? "Bilingual (JP→EN)" : l}
+            </Pill>
+          ))}
+        </div>
+
+        {/* Tone */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-slate-500 w-24 shrink-0">Tone</span>
+          {(["Administrative", "Polite", "Neutral"] as const).map((t) => (
+            <Pill key={t} active={tone === t} onClick={() => setTone(t)}>
+              {t}
+            </Pill>
+          ))}
+        </div>
+
       </section>
 
-      {/* Step 1 */}
-      <section className="space-y-6">
-        <div className="flex items-end justify-between gap-4">
-          <h2 className="text-2xl font-semibold">
-            Step 1 —{" "}
-            {mode === "reply"
-              ? "Paste the request you received"
-              : "Source material (optional)"}
-          </h2>
-
-          {mode === "scratch" ? (
+      {/* ── Step 1 — collapsible ── */}
+      <Collapsible
+        title={`Step 1 — ${mode === "reply" ? "Paste received message" : "Source material (optional)"}`}
+        defaultOpen={true}
+        badge={
+          requestText
+            ? requestText.slice(0, 60) + (requestText.length > 60 ? "…" : "")
+            : "(empty)"
+        }
+      >
+        {mode === "scratch" && (
+          <div className="flex justify-end mb-2">
             <button
               type="button"
               onClick={() => setRequestText("")}
-              className="text-sm underline text-slate-400"
-              title="Clear Step 1 text"
+              className="text-xs underline text-slate-500 hover:text-slate-300"
             >
               Clear
             </button>
-          ) : null}
-        </div>
-
-        <p className="text-slate-300">
-          {mode === "reply"
-            ? "Paste an email, forwarded message, PDF text, Word text, or rough notes."
-            : "If you have any reference text (old email, policy note, previous message), paste it here. Otherwise you can skip Step 1 and write your intent in Step 2."}
-        </p>
-
+          </div>
+        )}
         <textarea
-          className="w-full min-h-[260px] rounded-lg bg-slate-900 border border-slate-700 p-4 text-base"
+          className="w-full min-h-[200px] rounded-lg bg-slate-900 border border-slate-700 p-3 text-sm"
           placeholder={
             mode === "reply"
-              ? "Paste the original request here..."
-              : "Optional: paste any reference text here (or leave blank)..."
+              ? "Paste the original request here…"
+              : "Optional: paste reference text (or leave blank)…"
           }
           value={requestText}
           onChange={(e) => setRequestText(e.target.value)}
         />
-      </section>
+      </Collapsible>
 
-      {/* Step 2 — now flexible */}
-      <section className="space-y-6">
-        <h2 className="text-2xl font-semibold">
-          Step 2 — Purpose / Your draft / Instructions (optional)
-        </h2>
-
-        <p className="text-slate-300">
-          You can write any of the following here:
+      {/* ── Step 2 — collapsible ── */}
+      <Collapsible
+        title="Step 2 — Purpose / Your draft / Instructions (optional)"
+        defaultOpen={true}
+        badge={
+          purposeNote
+            ? purposeNote.slice(0, 60) + (purposeNote.length > 60 ? "…" : "")
+            : "(empty)"
+        }
+      >
+        <p className="text-slate-400 text-sm mb-2">
+          Write your purpose, a rough draft, or specific instructions.{" "}
+          <button
+            type="button"
+            onClick={() => setShowStep2Examples((v) => !v)}
+            className="underline text-slate-500 hover:text-slate-300"
+          >
+            {showStep2Examples ? "Hide examples" : "Show examples"}
+          </button>
         </p>
-        <ul className="text-slate-400 list-disc list-inside space-y-1">
-          <li>A short purpose note — e.g. "Requesting cooperation politely"</li>
-          <li>
-            A rough draft you wrote yourself — the AI will rewrite it more
-            naturally while preserving your meaning and intent
-          </li>
-          <li>
-            Specific instructions — e.g. "Do not commit to a date yet" or
-            "Keep it brief"
-          </li>
-        </ul>
-
+        {showStep2Examples && (
+          <ul className="text-slate-500 text-xs list-disc list-inside mb-3 space-y-1">
+            <li>Requesting cooperation politely</li>
+            <li>Asking questions first, not deciding yet</li>
+            <li>Do not commit to a date yet — keep it short</li>
+            <li>(or paste your own rough draft here)</li>
+          </ul>
+        )}
         <textarea
-          className="w-full min-h-[160px] rounded-lg bg-slate-900 border border-slate-700 p-4 text-base"
-          placeholder={`Examples:
-- Requesting cooperation
-- Asking questions first, not deciding yet
-- (or paste your own rough draft here)`}
+          className="w-full min-h-[120px] rounded-lg bg-slate-900 border border-slate-700 p-3 text-sm"
+          placeholder="Purpose, instructions, or rough draft…"
           value={purposeNote}
           onChange={(e) => setPurposeNote(e.target.value)}
         />
-      </section>
+      </Collapsible>
 
-      {/* Language & Tone */}
-      <section className="space-y-6">
-        <h2 className="text-2xl font-semibold">Language & Tone</h2>
-
-        <div className="grid gap-6 md:grid-cols-2">
-          <div className="space-y-2">
-            <label className="block text-slate-300 text-lg">Language</label>
-
-            <div className="flex flex-col gap-3">
-              <label className="flex items-center gap-3 text-lg">
-                <input
-                  type="radio"
-                  name="language"
-                  value="Japanese"
-                  checked={language === "Japanese"}
-                  onChange={() => setLanguage("Japanese")}
-                />
-                Japanese
-              </label>
-
-              <label className="flex items-center gap-3 text-lg">
-                <input
-                  type="radio"
-                  name="language"
-                  value="English"
-                  checked={language === "English"}
-                  onChange={() => setLanguage("English")}
-                />
-                English
-              </label>
-
-              <label className="flex items-center gap-3 text-lg">
-                <input
-                  type="radio"
-                  name="language"
-                  value="Bilingual"
-                  checked={language === "Bilingual"}
-                  onChange={() => setLanguage("Bilingual")}
-                />
-                Bilingual (JP → EN)
-              </label>
-            </div>
-
-            <p className="text-slate-400">
-              Bilingual outputs Japanese first, then English with a divider.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <label className="block text-slate-300 text-lg">Tone</label>
-
-            <div className="flex flex-col gap-3">
-              <label className="flex items-center gap-3 text-lg">
-                <input
-                  type="radio"
-                  name="tone"
-                  value="Administrative"
-                  checked={tone === "Administrative"}
-                  onChange={() => setTone("Administrative")}
-                />
-                Administrative
-              </label>
-
-              <label className="flex items-center gap-3 text-lg">
-                <input
-                  type="radio"
-                  name="tone"
-                  value="Polite"
-                  checked={tone === "Polite"}
-                  onChange={() => setTone("Polite")}
-                />
-                Polite
-              </label>
-
-              <label className="flex items-center gap-3 text-lg">
-                <input
-                  type="radio"
-                  name="tone"
-                  value="Neutral"
-                  checked={tone === "Neutral"}
-                  onChange={() => setTone("Neutral")}
-                />
-                Neutral
-              </label>
-            </div>
-
-            <p className="text-slate-400">
-              Administrative is best for internal university emails.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Step 3: Recipients */}
-      <section className="space-y-6">
-        <h2 className="text-2xl font-semibold">Step 3 — Recipients</h2>
-
-        <div className="space-y-4">
+      {/* ── Recipients — collapsible, closed by default ── */}
+      <Collapsible
+        title="Recipients"
+        defaultOpen={false}
+        badge={toField || "not set"}
+      >
+        <div className="space-y-3">
           <div>
-            <label className="block text-slate-300 mb-1">To</label>
+            <label className="block text-slate-400 text-xs mb-1">To</label>
             <input
-              className="w-full rounded-lg bg-slate-900 border border-slate-700 p-3"
+              className="w-full rounded-lg bg-slate-900 border border-slate-700 p-2 text-sm"
               placeholder="e.g. 今枝さん/Ms. Imaeda"
               value={toField}
               onChange={(e) => setToField(e.target.value)}
             />
           </div>
-
           <div>
-            <label className="block text-slate-300 mb-1">Cc (optional)</label>
+            <label className="block text-slate-400 text-xs mb-1">Cc (optional)</label>
             <input
-              className="w-full rounded-lg bg-slate-900 border border-slate-700 p-3"
+              className="w-full rounded-lg bg-slate-900 border border-slate-700 p-2 text-sm"
               placeholder="e.g. Educational Support Office"
               value={ccField}
               onChange={(e) => setCcField(e.target.value)}
             />
           </div>
         </div>
+      </Collapsible>
 
-        <p className="text-slate-400">(Directory connection will be added later.)</p>
-      </section>
+      {/* ── Generate ── */}
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          onClick={generateDraft}
+          disabled={busy}
+          className="px-5 py-2.5 rounded-lg bg-sky-600 text-black font-semibold disabled:opacity-60 text-sm"
+        >
+          {busy ? "Working…" : "Generate Draft"}
+        </button>
+        {error
+          ? <span className="text-red-300 text-sm">{error}</span>
+          : <span className="text-slate-500 text-sm">{guidanceText}</span>
+        }
+      </div>
 
-      {/* Step 4: Generate Draft */}
-      <section className="space-y-6">
-        <h2 className="text-2xl font-semibold">Step 4 — Generate Draft</h2>
-
-        <div className="flex flex-wrap items-center gap-4">
-          <button
-            onClick={generateDraft}
-            disabled={busy}
-            className="px-6 py-3 rounded-lg bg-sky-600 text-black font-semibold disabled:opacity-60"
-          >
-            {busy ? "Working..." : "Generate Draft with ChatGPT"}
-          </button>
-
-          {error ? (
-            <div className="text-red-300">{error}</div>
-          ) : (
-            <div className="text-slate-400">{guidanceText}</div>
-          )}
-        </div>
-      </section>
-
-      {/* Step 5: Draft Preview */}
-      <section className="space-y-6">
-        <h2 className="text-2xl font-semibold">
-          Step 5 — Draft preview (edit here, then refine or export)
-        </h2>
-
-        <p className="text-slate-400">
-          Edit the subject and body manually if needed. Then use{" "}
-          <span className="text-slate-300 font-medium">Refine Edited Draft</span>{" "}
-          to polish your changes while preserving your meaning.
-        </p>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-slate-300 mb-1">Subject</label>
-            <input
-              className="w-full rounded-lg bg-slate-900 border border-slate-700 p-3"
-              placeholder="Email subject"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="block text-slate-300 mb-1">Body</label>
-            <textarea
-              className="w-full min-h-[300px] rounded-lg bg-slate-900 border border-slate-700 p-4"
-              placeholder="Final email body appears here..."
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-            />
-          </div>
+      {/* ── Draft preview ── */}
+      <section className="space-y-2">
+        <div className="flex items-baseline gap-2">
+          <h2 className="font-semibold text-slate-200">Draft preview</h2>
+          <span className="text-slate-600 text-xs">Edit here, then refine or export</span>
         </div>
 
-        {/* Refine button */}
-        <div className="flex flex-wrap items-center gap-4 pt-2">
+        <input
+          className="w-full rounded-lg bg-slate-900 border border-slate-700 p-2.5 text-sm"
+          placeholder="Subject"
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+        />
+
+        <textarea
+          className="w-full min-h-[320px] rounded-lg bg-slate-900 border border-slate-700 p-3 text-sm"
+          placeholder="Email body appears here…"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+        />
+
+        {/* Refine + Export row */}
+        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-800">
           <button
             onClick={refineDraft}
             disabled={!subject || !body || busy}
-            className="px-6 py-3 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50"
-            title={
-              !subject || !body
-                ? "Generate a draft first"
-                : "Polish the edited draft without changing its meaning"
-            }
+            className="px-5 py-2.5 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50 text-sm"
+            title={!subject || !body ? "Generate a draft first" : "Polish without changing meaning"}
           >
-            {busy ? "Working..." : "Refine Edited Draft"}
+            {busy ? "Working…" : "Refine Edited Draft"}
           </button>
-          <p className="text-slate-400 text-sm">
-            Improves wording, grammar, and tone. Preserves your intended meaning
-            and factual content.
-          </p>
+          <button
+            onClick={exportOutlookDraft}
+            disabled={!subject || !body || busy}
+            className="px-5 py-2.5 rounded-lg bg-emerald-600 text-black font-semibold disabled:opacity-50 text-sm"
+            title={!subject || !body ? "Generate a draft first" : "Download draft.eml"}
+          >
+            Export Outlook Draft
+          </button>
+          <span className="text-slate-600 text-xs ml-auto">
+            Refine preserves meaning · Export opens in Outlook
+          </span>
         </div>
       </section>
 
-      {/* Export */}
-      <section className="border-t border-slate-800 pt-10 flex items-center justify-between">
-        <p className="text-slate-400">
-          Export creates an Outlook draft file. You will open it in Outlook and
-          send manually.
-        </p>
-
-        <button
-          onClick={exportOutlookDraft}
-          disabled={!subject || !body || busy}
-          className="px-6 py-3 rounded-lg bg-emerald-600 text-black font-semibold disabled:opacity-50"
-          title={
-            !subject || !body ? "Generate a draft first" : "Download draft.eml"
-          }
-        >
-          Export Outlook Draft File
-        </button>
-      </section>
     </main>
   );
 }
