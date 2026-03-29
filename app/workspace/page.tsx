@@ -6,17 +6,18 @@ import Link from "next/link";
 type DraftOut = { subject: string; body: string };
 type Mode = "reply" | "scratch";
 type Intent = "default" | "full" | "acknowledge" | "delay" | "question" | "rewrite";
+type Tone = "Administrative" | "Business-polite" | "Friendly-professional" | "Casual";
+type Language = "Japanese" | "English" | "Bilingual";
 
 const INTENT_OPTIONS: { value: Intent; label: string; hint: string }[] = [
-  { value: "default",     label: "Default",         hint: "Let Step 2 guide the output" },
-  { value: "full",        label: "Full reply",       hint: "Respond to all points" },
+  { value: "default", label: "Default", hint: "Let Step 2 guide the output" },
+  { value: "full", label: "Full reply", hint: "Respond to all main points" },
   { value: "acknowledge", label: "Acknowledge only", hint: "Short acknowledgment only" },
-  { value: "delay",       label: "Reply later",      hint: "Acknowledge, follow up later" },
-  { value: "question",    label: "Ask a question",   hint: "Ask for clarification" },
-  { value: "rewrite",     label: "Rewrite my draft", hint: "Polish Step 2 as a draft" },
+  { value: "delay", label: "Reply later", hint: "Acknowledge now, follow up later" },
+  { value: "question", label: "Ask a question", hint: "Ask for clarification" },
+  { value: "rewrite", label: "Rewrite my draft", hint: "Polish Step 2 into a draft" },
 ];
 
-// Small pill-style toggle used in the compact control bar
 function Pill({
   active,
   onClick,
@@ -44,7 +45,6 @@ function Pill({
   );
 }
 
-// Collapsible section with summary badge when closed
 function Collapsible({
   title,
   defaultOpen = true,
@@ -85,8 +85,8 @@ export default function WorkspacePage() {
   const [purposeNote, setPurposeNote] = useState("");
   const [showStep2Examples, setShowStep2Examples] = useState(false);
 
-  const [language, setLanguage] = useState<"Japanese" | "English" | "Bilingual">("Japanese");
-  const [tone, setTone] = useState<"Polite" | "Neutral" | "Administrative">("Administrative");
+  const [language, setLanguage] = useState<Language>("Japanese");
+  const [tone, setTone] = useState<Tone>("Administrative");
 
   const [toField, setToField] = useState("");
   const [ccField, setCcField] = useState("");
@@ -97,10 +97,27 @@ export default function WorkspacePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [copiedWhat, setCopiedWhat] = useState<"" | "body" | "subject">("");
+
   const guidanceText = useMemo(() => {
-    if (mode === "reply") return "Uses Step 1 + Step 2 to draft subject/body.";
-    return "Uses Step 2 (+ settings) to draft. Step 1 is optional.";
+    if (mode === "reply") return "Uses Step 1 and Step 2 to draft the message body.";
+    return "Uses Step 2 and settings to draft the message body. Step 1 is optional.";
   }, [mode]);
+
+  function flashCopied(kind: "body" | "subject") {
+    setCopiedWhat(kind);
+    window.setTimeout(() => setCopiedWhat(""), 1600);
+  }
+
+  async function copyText(text: string, kind: "body" | "subject") {
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      flashCopied(kind);
+    } catch (e: any) {
+      setError(String(e?.message || e || "Copy failed."));
+    }
+  }
 
   async function generateDraft() {
     setBusy(true);
@@ -110,11 +127,20 @@ export default function WorkspacePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mode, intent, requestText, purposeNote, language, tone, to: toField,
+          mode,
+          intent,
+          requestText,
+          purposeNote,
+          language,
+          tone,
+          to: toField,
         }),
       });
       const data = await resp.json();
-      if (!resp.ok) { setError(data?.error || "Draft generation failed."); return; }
+      if (!resp.ok) {
+        setError(data?.error || "Draft generation failed.");
+        return;
+      }
       const out = data as DraftOut;
       setSubject(out.subject || "");
       setBody(out.body || "");
@@ -133,10 +159,20 @@ export default function WorkspacePage() {
       const resp = await fetch("/api/refine", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subject, body, language, tone, to: toField, purposeNote }),
+        body: JSON.stringify({
+          subject,
+          body,
+          language,
+          tone,
+          to: toField,
+          purposeNote,
+        }),
       });
       const data = await resp.json();
-      if (!resp.ok) { setError(data?.error || "Refinement failed."); return; }
+      if (!resp.ok) {
+        setError(data?.error || "Refinement failed.");
+        return;
+      }
       const out = data as DraftOut;
       setSubject(out.subject || "");
       setBody(out.body || "");
@@ -147,39 +183,17 @@ export default function WorkspacePage() {
     }
   }
 
-  async function exportOutlookDraft() {
-    if (!subject || !body || busy) return;
-    const resp = await fetch("/api/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to: toField, cc: ccField, subject, body }),
-    });
-    if (!resp.ok) return;
-    const blob = await resp.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "draft.eml";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-  }
-
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 p-6 max-w-4xl mx-auto space-y-4">
-
-      {/* Header */}
       <header className="flex items-center gap-4 pb-3 border-b border-slate-800">
         <h1 className="text-xl font-semibold">Workspace</h1>
         <span className="text-slate-600 text-sm">Draft only — never sends</span>
-        <Link href="/" className="underline text-slate-500 text-sm ml-auto">← Home</Link>
+        <Link href="/" className="underline text-slate-500 text-sm ml-auto">
+          ← Home
+        </Link>
       </header>
 
-      {/* ── Combined control bar ── */}
       <section className="space-y-3 p-4 bg-slate-900 rounded-xl border border-slate-800">
-
-        {/* Mode */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-slate-500 w-24 shrink-0">Mode</span>
           <Pill active={mode === "reply"} onClick={() => setMode("reply")}>
@@ -190,7 +204,6 @@ export default function WorkspacePage() {
           </Pill>
         </div>
 
-        {/* Message Type */}
         <div className="flex items-start gap-2 flex-wrap">
           <span className="text-xs text-slate-500 w-24 shrink-0 pt-1.5">Message type</span>
           <div className="flex flex-wrap gap-2">
@@ -213,7 +226,6 @@ export default function WorkspacePage() {
           </div>
         </div>
 
-        {/* Language */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-slate-500 w-24 shrink-0">Language</span>
           {(["Japanese", "English", "Bilingual"] as const).map((l) => (
@@ -223,27 +235,20 @@ export default function WorkspacePage() {
           ))}
         </div>
 
-        {/* Tone */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-slate-500 w-24 shrink-0">Tone</span>
-          {(["Administrative", "Polite", "Neutral"] as const).map((t) => (
+          {(["Administrative", "Business-polite", "Friendly-professional", "Casual"] as const).map((t) => (
             <Pill key={t} active={tone === t} onClick={() => setTone(t)}>
               {t}
             </Pill>
           ))}
         </div>
-
       </section>
 
-      {/* ── Step 1 — collapsible ── */}
       <Collapsible
         title={`Step 1 — ${mode === "reply" ? "Paste received message" : "Source material (optional)"}`}
         defaultOpen={true}
-        badge={
-          requestText
-            ? requestText.slice(0, 60) + (requestText.length > 60 ? "…" : "")
-            : "(empty)"
-        }
+        badge={requestText ? requestText.slice(0, 60) + (requestText.length > 60 ? "…" : "") : "(empty)"}
       >
         {mode === "scratch" && (
           <div className="flex justify-end mb-2">
@@ -261,25 +266,20 @@ export default function WorkspacePage() {
           placeholder={
             mode === "reply"
               ? "Paste the original request here…"
-              : "Optional: paste reference text (or leave blank)…"
+              : "Optional: paste reference text, notes, or leave blank…"
           }
           value={requestText}
           onChange={(e) => setRequestText(e.target.value)}
         />
       </Collapsible>
 
-      {/* ── Step 2 — collapsible ── */}
       <Collapsible
-        title="Step 2 — Purpose / Your draft / Instructions (optional)"
+        title="Step 2 — What you want to say (optional)"
         defaultOpen={true}
-        badge={
-          purposeNote
-            ? purposeNote.slice(0, 60) + (purposeNote.length > 60 ? "…" : "")
-            : "(empty)"
-        }
+        badge={purposeNote ? purposeNote.slice(0, 60) + (purposeNote.length > 60 ? "…" : "") : "(empty)"}
       >
         <p className="text-slate-400 text-sm mb-2">
-          Write your purpose, a rough draft, or specific instructions.{" "}
+          Write your purpose, rough notes, or specific instructions.{" "}
           <button
             type="button"
             onClick={() => setShowStep2Examples((v) => !v)}
@@ -290,38 +290,33 @@ export default function WorkspacePage() {
         </p>
         {showStep2Examples && (
           <ul className="text-slate-500 text-xs list-disc list-inside mb-3 space-y-1">
-            <li>Requesting cooperation politely</li>
-            <li>Asking questions first, not deciding yet</li>
-            <li>Do not commit to a date yet — keep it short</li>
-            <li>(or paste your own rough draft here)</li>
+            <li>この役目をお願いした</li>
+            <li>行きたくないが、強く断りたくない</li>
+            <li>Ask a question first, do not decide yet</li>
+            <li>Keep it short and administrative</li>
           </ul>
         )}
         <textarea
           className="w-full min-h-[120px] rounded-lg bg-slate-900 border border-slate-700 p-3 text-sm"
-          placeholder="Purpose, instructions, or rough draft…"
+          placeholder="Purpose, rough draft, or instructions…"
           value={purposeNote}
           onChange={(e) => setPurposeNote(e.target.value)}
         />
       </Collapsible>
 
-      {/* ── Recipients — collapsible, closed by default ── */}
-      <Collapsible
-        title="Recipients"
-        defaultOpen={false}
-        badge={toField || "not set"}
-      >
+      <Collapsible title="Recipients" defaultOpen={false} badge={toField || "not set"}>
         <div className="space-y-3">
           <div>
-            <label className="block text-slate-400 text-xs mb-1">To</label>
+            <label className="block text-slate-400 text-xs mb-1">Main recipient</label>
             <input
               className="w-full rounded-lg bg-slate-900 border border-slate-700 p-2 text-sm"
-              placeholder="e.g. 今枝さん/Ms. Imaeda"
+              placeholder="e.g. 今枝さん / Ms. Imaeda"
               value={toField}
               onChange={(e) => setToField(e.target.value)}
             />
           </div>
           <div>
-            <label className="block text-slate-400 text-xs mb-1">Cc (optional)</label>
+            <label className="block text-slate-400 text-xs mb-1">Other people concerned (optional)</label>
             <input
               className="w-full rounded-lg bg-slate-900 border border-slate-700 p-2 text-sm"
               placeholder="e.g. Educational Support Office"
@@ -332,7 +327,6 @@ export default function WorkspacePage() {
         </div>
       </Collapsible>
 
-      {/* ── Generate ── */}
       <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={generateDraft}
@@ -341,25 +335,35 @@ export default function WorkspacePage() {
         >
           {busy ? "Working…" : "Generate Draft"}
         </button>
-        {error
-          ? <span className="text-red-300 text-sm">{error}</span>
-          : <span className="text-slate-500 text-sm">{guidanceText}</span>
-        }
+        {error ? (
+          <span className="text-red-300 text-sm">{error}</span>
+        ) : (
+          <span className="text-slate-500 text-sm">{guidanceText}</span>
+        )}
       </div>
 
-      {/* ── Draft preview ── */}
       <section className="space-y-2">
         <div className="flex items-baseline gap-2">
           <h2 className="font-semibold text-slate-200">Draft preview</h2>
-          <span className="text-slate-600 text-xs">Edit here, then refine or export</span>
+          <span className="text-slate-600 text-xs">Edit here, then refine or copy</span>
         </div>
 
-        <input
-          className="w-full rounded-lg bg-slate-900 border border-slate-700 p-2.5 text-sm"
-          placeholder="Subject"
-          value={subject}
-          onChange={(e) => setSubject(e.target.value)}
-        />
+        <div className="flex gap-2 items-center">
+          <input
+            className="w-full rounded-lg bg-slate-900 border border-slate-700 p-2.5 text-sm"
+            placeholder="Subject"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+          />
+          <button
+            onClick={() => copyText(subject, "subject")}
+            disabled={!subject || busy}
+            className="px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 font-medium disabled:opacity-50 text-sm whitespace-nowrap"
+            title={!subject ? "Generate a draft first" : "Copy subject"}
+          >
+            {copiedWhat === "subject" ? "Copied" : "Copy Subject"}
+          </button>
+        </div>
 
         <textarea
           className="w-full min-h-[320px] rounded-lg bg-slate-900 border border-slate-700 p-3 text-sm"
@@ -368,7 +372,6 @@ export default function WorkspacePage() {
           onChange={(e) => setBody(e.target.value)}
         />
 
-        {/* Refine + Export row */}
         <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-800">
           <button
             onClick={refineDraft}
@@ -378,20 +381,21 @@ export default function WorkspacePage() {
           >
             {busy ? "Working…" : "Refine Edited Draft"}
           </button>
+
           <button
-            onClick={exportOutlookDraft}
-            disabled={!subject || !body || busy}
+            onClick={() => copyText(body, "body")}
+            disabled={!body || busy}
             className="px-5 py-2.5 rounded-lg bg-emerald-600 text-black font-semibold disabled:opacity-50 text-sm"
-            title={!subject || !body ? "Generate a draft first" : "Download draft.eml"}
+            title={!body ? "Generate a draft first" : "Copy current body"}
           >
-            Export Outlook Draft
+            {copiedWhat === "body" ? "Copied" : "Copy Body"}
           </button>
+
           <span className="text-slate-600 text-xs ml-auto">
-            Refine preserves meaning · Export opens in Outlook
+            Refine preserves meaning · Copy body for Outlook
           </span>
         </div>
       </section>
-
     </main>
   );
 }
