@@ -4,9 +4,10 @@ import OpenAI from "openai";
 export const runtime = "nodejs";
 
 export const SENDER_SIGNATURE = {
-  jp: `江口　均
-北星学園大学
-英文学科`,
+  jp: `北星学園大学
+英文学科
+
+江口　均`,
   en: `Hitoshi Eguchi
 English Department
 Hokusei Gakuen University`,
@@ -14,14 +15,16 @@ Hokusei Gakuen University`,
 
 type Mode = "reply" | "scratch";
 type Intent = "default" | "full" | "acknowledge" | "delay" | "question" | "rewrite";
+type Language = "Japanese" | "English" | "Bilingual";
+type Tone = "Administrative" | "Business-polite" | "Friendly-professional" | "Casual";
 
 type DraftRequest = {
   mode?: Mode;
   intent?: Intent;
   requestText?: string;
   purposeNote?: string;
-  language?: "Japanese" | "English" | "Bilingual";
-  tone?: "Polite" | "Neutral" | "Administrative";
+  language?: Language;
+  tone?: Tone;
   to?: string;
 };
 
@@ -33,7 +36,6 @@ export function safeTrim(s: unknown, maxLen = 20000): string {
   return t.length > maxLen ? t.slice(0, maxLen) : t;
 }
 
-/** newest at top; cut before first quoted header marker */
 function extractLatestIncomingMessage(fullThread: string): {
   replyTarget: string;
   background: string;
@@ -97,7 +99,7 @@ export function stripAccidentalSignature(text: string): string {
 
 export function prependSalutation(opts: {
   body: string;
-  language: "Japanese" | "English" | "Bilingual";
+  language: Language;
   toJp: string;
   toEn: string;
 }): string {
@@ -109,6 +111,7 @@ export function prependSalutation(opts: {
 
   const normalized = normalizeDivider(t);
   const parts = normalized.split("\n-----\n");
+
   if (parts.length === 2) {
     const jp = parts[0].trim();
     const en = parts[1].trim();
@@ -122,7 +125,7 @@ export function prependSalutation(opts: {
 
 export function attachSignatureByLanguage(opts: {
   body: string;
-  language: "Japanese" | "English" | "Bilingual";
+  language: Language;
 }): string {
   const language = opts.language;
   let finalBody = normalizeDivider(stripAccidentalSignature(opts.body));
@@ -142,6 +145,7 @@ export function attachSignatureByLanguage(opts: {
   }
 
   const parts = finalBody.split("\n-----\n");
+
   if (parts.length === 2) {
     const jpPartRaw = parts[0].trim();
     const enPartRaw = parts[1].trim();
@@ -162,8 +166,6 @@ export function attachSignatureByLanguage(opts: {
   }
   return finalBody;
 }
-
-/** ===== Language validation ===== */
 
 export function countJapaneseChars(s: string): number {
   const m = s.match(/[\u3040-\u30ff\u3400-\u9fff]/g);
@@ -197,10 +199,7 @@ export function isBilingualFormatOK(s: string): boolean {
   return isJapaneseEnough(parts[0]) && isEnglishEnough(parts[1]);
 }
 
-export function languageOutputOK(
-  language: "Japanese" | "English" | "Bilingual",
-  body: string
-): boolean {
+export function languageOutputOK(language: Language, body: string): boolean {
   const t = body.trim();
   if (!t) return false;
   if (language === "Bilingual") return isBilingualFormatOK(t);
@@ -208,9 +207,20 @@ export function languageOutputOK(
   return isJapaneseEnough(t);
 }
 
-/** ===== Prompts ===== */
+function toneInstruction(tone: Tone): string {
+  if (tone === "Administrative") {
+    return "Administrative: concise, neutral, official, suitable for university administration.";
+  }
+  if (tone === "Business-polite") {
+    return "Business-polite: polite, professional, slightly warm, suitable for formal communication.";
+  }
+  if (tone === "Friendly-professional") {
+    return "Friendly-professional: warm and collegial, but still professional.";
+  }
+  return "Casual: relaxed but still respectful. Use only when appropriate.";
+}
 
-function systemPromptBase(): string {
+function systemPromptBase(tone: Tone): string {
   return `
 You are an email drafting assistant for a Japanese university department chair.
 
@@ -220,72 +230,59 @@ ROLE (STRICT):
 - Never write as the recipient or as another office.
 
 GREETING / SIGNATURE (STRICT):
-- Do NOT include any greeting line (no recipient name line).
-  The system will prepend it from the Step 3 "To" field.
+- Do NOT include any greeting line.
+  The system will prepend it from the Step 3 recipient field.
 - Do NOT include any signature lines or sender name.
   The system will attach the signature.
 
 TONE:
-- Start with a brief polite acknowledgment ("Thank you for your message" / "ご連絡ありがとうございます"),
-  then confirm, then state what you will do.
+${toneInstruction(tone)}
 
 OUTPUT (STRICT):
 - Return ONLY valid JSON: {"subject":"...","body":"..."}
 - No markdown, no extra keys.
 
 LANGUAGE:
-- Japanese: Japanese subject+body
-- English: English subject+body
-- Bilingual: Japanese, then exactly "\\n-----\\n", then English
+- Japanese: Japanese subject and body
+- English: English subject and body
+- Bilingual: Japanese first, then exactly "\\n-----\\n", then English
 `.trim();
 }
 
-function systemPromptHard(language: "Japanese" | "English" | "Bilingual"): string {
-  const base = systemPromptBase();
+function systemPromptHard(language: Language, tone: Tone): string {
+  const base = systemPromptBase(tone);
+
   if (language === "English") {
-    return (
-      base +
-      `
+    return `${base}
 
 HARD ENGLISH REQUIREMENT:
 - The entire subject and body MUST be English.
-- Do NOT use Japanese characters at all in the body.
-`
-    ).trim();
+- Do NOT use Japanese characters in the body.`.trim();
   }
+
   if (language === "Japanese") {
-    return (
-      base +
-      `
+    return `${base}
 
 HARD JAPANESE REQUIREMENT:
 - The entire subject and body MUST be Japanese.
-- Do NOT use English sentences in the body.
-`
-    ).trim();
+- Do NOT use English sentences in the body.`.trim();
   }
-  return (
-    base +
-    `
+
+  return `${base}
 
 HARD BILINGUAL REQUIREMENT:
 - Japanese first, then exactly "\\n-----\\n", then English.
 - Japanese block MUST be Japanese.
-- English block MUST be English (no Japanese characters).
-`
-  ).trim();
+- English block MUST be English.`.trim();
 }
 
-/**
- * Classify Step 2 input: is it a rough draft, or a purpose/instruction note?
- * Heuristic: if it's multi-sentence and reads like a message body, treat as draft.
- */
 function classifyPurposeNote(note: string): "draft" | "instruction" {
   const t = note.trim();
   if (!t) return "instruction";
-  // Rough heuristic: 3+ lines or 80+ characters with sentence-ending punctuation => likely a draft
+
   const lines = t.split("\n").filter((l) => l.trim().length > 0);
   const hasSentenceEnd = /[。！？.!?]/.test(t);
+
   if ((lines.length >= 3 || t.length >= 80) && hasSentenceEnd) return "draft";
   return "instruction";
 }
@@ -296,23 +293,21 @@ function userPrompt(args: {
   replyTarget: string;
   backgroundThread: string;
   purposeNote: string;
-  language: "Japanese" | "English" | "Bilingual";
-  tone: "Polite" | "Neutral" | "Administrative";
+  language: Language;
+  tone: Tone;
 }): string {
   const { intent } = args;
-
-  // ── Priority 1: explicit intent (overrides Step 2 classification) ──────────
 
   if (intent === "acknowledge") {
     return `
 TASK:
 Draft a short acknowledgment reply. Nothing more.
 
-RULES (STRICT):
+RULES:
 - Write ONLY that you have received the message.
-- Do NOT respond to specific content, questions, or requests in the original message.
+- Do NOT respond to specific content, questions, or requests.
 - Do NOT confirm details, offer actions, or state next steps.
-- One to three sentences maximum. Brevity is correct here.
+- One to three sentences maximum.
 
 ORIGINAL MESSAGE (BACKGROUND ONLY):
 ${args.replyTarget}
@@ -333,11 +328,11 @@ REMINDERS:
 TASK:
 Draft a reply saying you have received the message and will respond properly later.
 
-RULES (STRICT):
+RULES:
 - Acknowledge receipt.
-- Say you will follow up (without committing to a specific date unless the sender's note specifies one).
-- Do NOT respond to the content, answer questions, or make decisions yet.
-- Keep it short — two to four sentences.
+- Say you will follow up later.
+- Do NOT answer questions or make decisions yet.
+- Keep it short.
 
 ORIGINAL MESSAGE (BACKGROUND ONLY):
 ${args.replyTarget}
@@ -358,16 +353,15 @@ REMINDERS:
 TASK:
 Draft a reply that asks a clarifying question instead of answering or agreeing.
 
-RULES (STRICT):
+RULES:
 - Do NOT answer requests or confirm details from the original message.
-- Do NOT make commitments or state actions.
+- Do NOT make commitments.
 - Ask one focused clarifying question, or ask for more information.
-- Use the sender's note (if any) to identify what to ask about.
 
-ORIGINAL MESSAGE (BACKGROUND CONTEXT):
+ORIGINAL MESSAGE:
 ${args.replyTarget}
 
-${args.purposeNote ? `WHAT TO CLARIFY (from sender):\n${args.purposeNote}` : ""}
+${args.purposeNote ? `WHAT TO CLARIFY:\n${args.purposeNote}` : ""}
 
 SETTINGS:
 - language: ${args.language}
@@ -381,7 +375,7 @@ REMINDERS:
   if (intent === "full") {
     return `
 TASK:
-Draft a full, comprehensive email reply that addresses all points in the original message.
+Draft a full email reply that addresses all main points in the original message.
 
 ORIGINAL MESSAGE:
 ${args.replyTarget}
@@ -403,18 +397,18 @@ REMINDERS:
   if (intent === "rewrite") {
     return `
 TASK:
-The sender has written a rough draft. Rewrite it as a polished, professional email.
+The sender has written a rough draft. Rewrite it as a polished professional email.
 
-RULES (STRICT):
-- Preserve the sender's meaning, intended action, and decision exactly.
-- Preserve all factual content (names, dates, numbers, commitments).
-- Do NOT introduce new claims or remove important details.
-- Only improve clarity, grammar, naturalness, and tone.
+RULES:
+- Preserve meaning, intended action, and decision exactly.
+- Preserve factual content.
+- Do NOT introduce new claims.
+- Improve clarity, grammar, naturalness, and tone.
 
 SENDER'S ROUGH DRAFT:
 ${args.purposeNote || args.replyTarget}
 
-${args.backgroundThread ? `REFERENCE CONTEXT (optional):\n${args.backgroundThread}` : ""}
+${args.backgroundThread ? `REFERENCE CONTEXT:\n${args.backgroundThread}` : ""}
 
 SETTINGS:
 - language: ${args.language}
@@ -425,27 +419,24 @@ REMINDERS:
 `.trim();
   }
 
-  // ── Priority 2 & 3: default — Step 2 classification then Step 1 ────────────
-
   const noteType = classifyPurposeNote(args.purposeNote);
 
   if (args.mode === "scratch") {
     if (noteType === "draft") {
       return `
 TASK:
-The user has written a rough draft of the email they want to send.
-Rewrite it as a polished, professional email.
+Rewrite the user's rough draft as a polished professional email.
 
 IMPORTANT:
-- Preserve the user's intended meaning, decision, and action exactly.
-- Preserve all factual content (names, dates, numbers, commitments).
-- Do NOT introduce new claims or remove important information.
+- Preserve intended meaning, decision, and action exactly.
+- Preserve factual content.
+- Do NOT introduce new claims.
 - Only improve clarity, grammar, naturalness, and tone.
 
 USER'S ROUGH DRAFT:
 ${args.purposeNote}
 
-REFERENCE TEXT (optional; may be blank):
+REFERENCE TEXT:
 ${args.backgroundThread || "(none)"}
 
 SETTINGS:
@@ -459,15 +450,15 @@ REMINDERS:
 
     return `
 TASK:
-Draft a NEW email (not a reply).
+Draft a new email.
 
-GOAL / REQUEST (WHAT THE EMAIL SHOULD ACHIEVE):
+GOAL / REQUEST:
 ${args.replyTarget}
 
-REFERENCE TEXT (optional; may be blank):
+REFERENCE TEXT:
 ${args.backgroundThread || "(none)"}
 
-PURPOSE NOTE / INSTRUCTIONS (optional):
+PURPOSE NOTE / INSTRUCTIONS:
 ${args.purposeNote || "(none)"}
 
 SETTINGS:
@@ -479,27 +470,24 @@ REMINDERS:
 `.trim();
   }
 
-  // reply mode
   if (noteType === "draft") {
     return `
 TASK:
-The user has written a rough draft reply to the received message below.
-Rewrite it as a polished, professional reply.
+Rewrite the user's rough draft reply as a polished professional reply.
 
 IMPORTANT:
-- Preserve the user's intended meaning, decision, and action exactly.
-- Preserve all factual content (names, dates, numbers, commitments).
-- Do NOT introduce new claims or remove important information.
-- Only improve clarity, grammar, naturalness, and tone.
-- Ensure it is appropriate as a reply to the RECEIVED MESSAGE below.
+- Preserve intended meaning, decision, and action exactly.
+- Preserve factual content.
+- Do NOT introduce new claims.
+- Ensure it is appropriate as a reply to the received message.
 
 USER'S ROUGH DRAFT:
 ${args.purposeNote}
 
-RECEIVED MESSAGE (for context):
+RECEIVED MESSAGE:
 ${args.replyTarget}
 
-BACKGROUND CONTEXT (REFERENCE ONLY):
+BACKGROUND CONTEXT:
 ${args.backgroundThread}
 
 SETTINGS:
@@ -515,23 +503,20 @@ REMINDERS:
 TASK:
 Draft an email reply.
 
-YOUR PRIMARY INSTRUCTION (FOLLOW THIS EXACTLY — THIS OVERRIDES EVERYTHING ELSE):
+PRIMARY INSTRUCTION:
 ${args.purposeNote || "(none)"}
 
 This instruction represents the sender's communication decision.
-You MUST follow it exactly, even if it contradicts what a "normal" reply would do.
+Follow it exactly.
 
 CRITICAL RULES:
-- The PRIMARY INSTRUCTION above is the only thing you are optimizing for.
 - Do NOT automatically respond to all content in the original message.
-- Do NOT expand into a full reply unless the instruction says to.
+- Do NOT expand into a full reply unless instructed.
 - Do NOT confirm every point in the original message.
-- Do NOT introduce actions, commitments, or next steps not stated in the instruction.
-- If the instruction indicates a short acknowledgment, reply later, or defer — write ONLY that. Nothing more.
-- If the instruction says to keep it short, keep it short. One or two sentences is acceptable and correct.
-- The original message is background context only. It tells you what was received. It does NOT tell you what to write.
+- Do NOT introduce actions or commitments not stated in the instruction.
+- The original message is background context only.
 
-ORIGINAL MESSAGE (BACKGROUND CONTEXT ONLY — DO NOT TREAT AS A CHECKLIST TO RESPOND TO):
+ORIGINAL MESSAGE:
 ${args.replyTarget}
 
 SETTINGS:
@@ -545,6 +530,7 @@ REMINDERS:
 
 export function parseModelJSON(text: string): DraftResponse {
   const raw = (text || "").trim();
+
   try {
     const obj = JSON.parse(raw);
     return {
@@ -561,6 +547,7 @@ export function parseModelJSON(text: string): DraftResponse {
       body: safeTrim(obj.body, 20000),
     };
   }
+
   throw new Error("Model did not return valid JSON.");
 }
 
@@ -590,7 +577,15 @@ export async function POST(req: Request) {
 
     const mode: Mode = data.mode === "scratch" ? "scratch" : "reply";
 
-    const VALID_INTENTS: Intent[] = ["default", "full", "acknowledge", "delay", "question", "rewrite"];
+    const VALID_INTENTS: Intent[] = [
+      "default",
+      "full",
+      "acknowledge",
+      "delay",
+      "question",
+      "rewrite",
+    ];
+
     const intent: Intent = VALID_INTENTS.includes(data.intent as Intent)
       ? (data.intent as Intent)
       : "default";
@@ -598,10 +593,8 @@ export async function POST(req: Request) {
     const requestText = safeTrim(data.requestText ?? "", 50000);
     const purposeNote = safeTrim(data.purposeNote ?? "", 2000);
 
-    const language: "Japanese" | "English" | "Bilingual" =
-      data.language ?? "Japanese";
-    const tone: "Polite" | "Neutral" | "Administrative" =
-      data.tone ?? "Administrative";
+    const language: Language = data.language ?? "Japanese";
+    const tone: Tone = data.tone ?? "Administrative";
 
     const { jp: toJp, en: toEn } = splitToBilingual(data.to);
 
@@ -619,7 +612,7 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error:
-            "Please write your goal or a rough draft in Step 2 (or paste reference text in Step 1).",
+            "Please write your goal or a rough draft in Step 2, or paste reference text in Step 1.",
         },
         { status: 400 }
       );
@@ -658,21 +651,19 @@ export async function POST(req: Request) {
       tone,
     });
 
-    // First attempt
     let out = await callModelOnce({
       client,
       model,
-      systemPrompt: systemPromptBase(),
+      systemPrompt: systemPromptBase(tone),
       userContent: uContent,
       temperature: 0.2,
     });
 
-    // Retry with hard prompt if language check fails
     if (!languageOutputOK(language, out.body)) {
       out = await callModelOnce({
         client,
         model,
-        systemPrompt: systemPromptHard(language),
+        systemPrompt: systemPromptHard(language, tone),
         userContent: uContent,
         temperature: 0.0,
       });
@@ -682,7 +673,7 @@ export async function POST(req: Request) {
           {
             error: "Model output did not match requested language/format.",
             detail:
-              "Please try again. (If this repeats, we can switch to a more strict model setting.)",
+              "Please try again. If this repeats, the language validation may need to be relaxed.",
           },
           { status: 500 }
         );
@@ -692,11 +683,21 @@ export async function POST(req: Request) {
     const subject = safeTrim(out.subject, 300);
     const body = safeTrim(out.body, 20000);
 
-    const bodyWithSalutation = prependSalutation({ body, language, toJp, toEn });
-    const finalBody = attachSignatureByLanguage({ body: bodyWithSalutation, language });
+    const bodyWithSalutation = prependSalutation({
+      body,
+      language,
+      toJp,
+      toEn,
+    });
+
+    const finalBody = attachSignatureByLanguage({
+      body: bodyWithSalutation,
+      language,
+    });
 
     return NextResponse.json({ subject, body: finalBody });
   } catch (e: any) {
+    console.error("Draft API error:", e);
     return NextResponse.json(
       { error: "Server error", detail: String(e?.message || e) },
       { status: 500 }
